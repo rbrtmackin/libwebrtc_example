@@ -117,8 +117,10 @@ PeerConnectionHandler::PeerConnectionHandler(
         return;
     }
     
-    // Add video track
-    auto video_track = factory_->CreateVideoTrack("video", video_source.get());
+    // Add video track - pass video source directly as it now implements VideoTrackSourceInterface
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track = 
+        factory_->CreateVideoTrack("video", video_source.get());
+    
     auto result = peer_connection_->AddTrack(video_track, {"stream"});
     
     if (!result.ok()) {
@@ -139,28 +141,31 @@ void PeerConnectionHandler::HandleOffer(const std::string& sdp) {
     
     // Create session description from SDP
     webrtc::SdpParseError error;
-    std::unique_ptr<webrtc::SessionDescriptionInterface> session_description =
+    std::unique_ptr<webrtc::SessionDescriptionInterface> session_description_ptr =
         webrtc::CreateSessionDescription(webrtc::SdpType::kOffer, sdp, &error);
     
-    if (!session_description) {
+    if (!session_description_ptr) {
         RTC_LOG(LS_ERROR) << "Failed to parse offer: " << error.description;
         return;
     }
     
-    // Set remote description
-    auto set_observer = rtc::make_ref_counted<SetSDPObserver>([this]() {
+    // Get raw pointer and release ownership - SetRemoteDescription takes ownership
+    webrtc::SessionDescriptionInterface* session_description = session_description_ptr.release();
+    
+    // Set remote description - older API takes raw pointer and observer
+    auto set_observer = new rtc::RefCountedObject<SetSDPObserver>([this]() {
         RTC_LOG(LS_INFO) << "Remote description set, creating answer";
         CreateAnswer();
     });
     
-    peer_connection_->SetRemoteDescription(std::move(session_description), set_observer.get());
+    peer_connection_->SetRemoteDescription(set_observer, session_description);
 }
 
 void PeerConnectionHandler::CreateAnswer() {
-    auto create_observer = rtc::make_ref_counted<CreateSDPObserver>(
+    auto create_observer = new rtc::RefCountedObject<CreateSDPObserver>(
         [this](webrtc::SessionDescriptionInterface* desc) {
-            // Set local description
-            auto set_observer = rtc::make_ref_counted<SetSDPObserver>([this, desc]() {
+            // Set local description - older API
+            auto set_observer = new rtc::RefCountedObject<SetSDPObserver>([this, desc]() {
                 // Send answer to client
                 std::string sdp;
                 desc->ToString(&sdp);
@@ -168,15 +173,13 @@ void PeerConnectionHandler::CreateAnswer() {
                 RTC_LOG(LS_INFO) << "Answer sent to client";
             });
             
-            peer_connection_->SetLocalDescription(
-                std::unique_ptr<webrtc::SessionDescriptionInterface>(desc),
-                set_observer.get()
-            );
+            // SetLocalDescription takes observer first, then raw pointer
+            peer_connection_->SetLocalDescription(set_observer, desc);
         }
     );
     
     webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
-    peer_connection_->CreateAnswer(create_observer.get(), options);
+    peer_connection_->CreateAnswer(create_observer, options);
 }
 
 void PeerConnectionHandler::HandleIceCandidate(

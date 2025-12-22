@@ -7,8 +7,7 @@
 #include <chrono>
 
 TestVideoSource::TestVideoSource(int width, int height, int fps)
-    : VideoTrackSource(false),  // not remote
-      width_(width),
+    : width_(width),
       height_(height),
       fps_(fps),
       running_(false),
@@ -32,6 +31,17 @@ TestVideoSource::~TestVideoSource() {
     }
     
     RTC_LOG(LS_INFO) << "TestVideoSource destroyed";
+}
+
+void TestVideoSource::AddOrUpdateSink(
+    rtc::VideoSinkInterface<webrtc::VideoFrame>* sink,
+    const rtc::VideoSinkWants& wants) {
+    broadcaster_.AddOrUpdateSink(sink, wants);
+}
+
+void TestVideoSource::RemoveSink(
+    rtc::VideoSinkInterface<webrtc::VideoFrame>* sink) {
+    broadcaster_.RemoveSink(sink);
 }
 
 void TestVideoSource::Start() {
@@ -64,10 +74,6 @@ void TestVideoSource::Stop() {
     RTC_LOG(LS_INFO) << "Frame generation stopped. Total frames: " << frames_sent_;
 }
 
-rtc::VideoSourceInterface<webrtc::VideoFrame>* TestVideoSource::source() {
-    return &broadcaster_;
-}
-
 void TestVideoSource::GenerateFrames() {
     auto frame_interval = std::chrono::microseconds(1000000 / fps_);
     auto next_frame_time = std::chrono::steady_clock::now();
@@ -95,9 +101,13 @@ void TestVideoSource::GenerateFrames() {
         memset(buffer->MutableDataV(), 128, uv_size);
         
         // Create VideoFrame
+        // Use microseconds since epoch for timestamp
+        int64_t timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        
         webrtc::VideoFrame frame = webrtc::VideoFrame::Builder()
             .set_video_frame_buffer(buffer)
-            .set_timestamp_us(rtc::TimeMicros())
+            .set_timestamp_us(timestamp_us)
             .build();
         
         // Broadcast frame to all sinks

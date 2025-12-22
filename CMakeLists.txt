@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(WebRTCServerWithWebClient)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set this to your WebRTC root directory
@@ -37,11 +37,13 @@ add_executable(webrtc_server ${SERVER_SOURCES} ${SERVER_HEADERS})
 # Windows-specific settings
 if(WIN32)
     # Runtime library
+    # bengreenier/webrtc uses /MT (static runtime), not /MD (dynamic)
     set_property(TARGET webrtc_server PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
     # Compiler options
     target_compile_options(webrtc_server PRIVATE
+        /std:c++20          # Use C++20 standard
         /W3
         /wd4100  # Unreferenced formal parameter
         /wd4244  # Conversion possible loss of data

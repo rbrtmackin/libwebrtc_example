@@ -45,6 +45,13 @@ public:
     CreateSDPObserver(std::function<void(webrtc::SessionDescriptionInterface*)> callback);
     void OnSuccess(webrtc::SessionDescriptionInterface* desc) override;
     void OnFailure(webrtc::RTCError error) override;
+    
+    // Reference counting - required for scoped_refptr
+    void AddRef() const override {}
+    rtc::RefCountReleaseStatus Release() const override {
+        return rtc::RefCountReleaseStatus::kDroppedLastRef;
+    }
+    
 private:
     std::function<void(webrtc::SessionDescriptionInterface*)> callback_;
 };
@@ -54,6 +61,13 @@ public:
     SetSDPObserver(std::function<void()> callback);
     void OnSuccess() override;
     void OnFailure(webrtc::RTCError error) override;
+    
+    // Reference counting - required for scoped_refptr
+    void AddRef() const override {}
+    rtc::RefCountReleaseStatus Release() const override {
+        return rtc::RefCountReleaseStatus::kDroppedLastRef;
+    }
+    
 private:
     std::function<void()> callback_;
 };
