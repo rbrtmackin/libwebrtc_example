@@ -16,10 +16,9 @@ include_directories(
 
 # Source files for the server
 set(SERVER_SOURCES
-    webrtc_server.cpp
+    webrtc_server_http.cpp
     video_source.cpp
     throughput_receiver.cpp
-    signaling_server.cpp
     peer_connection_handler.cpp
 )
 
@@ -27,8 +26,8 @@ set(SERVER_SOURCES
 set(SERVER_HEADERS
     video_source.h
     throughput_receiver.h
-    signaling_server.h
     peer_connection_handler.h
+    simple_video_factories.h
 )
 
 # Create server executable
@@ -119,20 +118,16 @@ set_target_properties(webrtc_server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# Copy HTML client to build directory
-configure_file(${CMAKE_SOURCE_DIR}/client.html 
-               ${CMAKE_BINARY_DIR}/bin/client.html COPYONLY)
-
 # Display build information
 message(STATUS "============================================")
-message(STATUS "WebRTC Server with Web Client")
+message(STATUS "WebRTC C++ HTTP Server with libwebrtc")
 message(STATUS "============================================")
 message(STATUS "WebRTC Root: ${WEBRTC_ROOT}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "Output: ${CMAKE_BINARY_DIR}/bin/webrtc_server")
-message(STATUS "Client: ${CMAKE_BINARY_DIR}/bin/client.html")
+message(STATUS "Server Type: HTTP (port 9090)")
+message(STATUS "Use with: Node.js signaling relay")
 message(STATUS "============================================")
 
 # Installation
 install(TARGETS webrtc_server RUNTIME DESTINATION bin)
-install(FILES client.html DESTINATION bin)
