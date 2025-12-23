@@ -329,8 +329,13 @@ void RunHTTPServer(int port) {
 
 int main(int argc, char* argv[]) {
     // Configuration
+	 /*
     const int WIDTH = 1920;
     const int HEIGHT = 1080;
+    const int FPS = 30;
+	 */
+    const int WIDTH = 3840;
+    const int HEIGHT = 2160;
     const int FPS = 30;
     const int HTTP_PORT = 9090;
     
