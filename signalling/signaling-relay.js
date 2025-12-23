@@ -25,16 +25,21 @@ console.log('='.repeat(60));
 console.log('');
 
 wss.on('connection', (ws) => {
-    console.log('✅ Browser connected to relay');
+    const sessionId = Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
+    console.log(`✅ Browser connected - Session ID: ${sessionId}`);
     
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
-            console.log(`📨 From browser: ${data.type}`);
+            
+            // Add session ID to message
+            data.sessionId = sessionId;
+            
+            console.log(`📨 [${sessionId}] From browser: ${data.type}`);
             
             // Forward to C++ server via HTTP POST
             try {
-                console.log(`🔄 Forwarding to C++ server at ${CPP_SERVER}/signaling`);
+                console.log(`🔄 [${sessionId}] Forwarding to C++ server at ${CPP_SERVER}/signaling`);
                 
                 const response = await axios.post(`${CPP_SERVER}/signaling`, data, {
                     timeout: 5000,
@@ -43,45 +48,61 @@ wss.on('connection', (ws) => {
                     }
                 });
                 
-                console.log(`📬 From C++ server: ${response.data.type}`);
-                console.log(`📤 Sending to browser:`, JSON.stringify(response.data).substring(0, 100) + '...');
+                console.log(`📬 [${sessionId}] From C++ server: ${response.data.type}`);
                 
                 // Send C++ response back to browser
                 ws.send(JSON.stringify(response.data));
                 
             } catch (error) {
                 if (error.code === 'ECONNREFUSED') {
-                    console.error('❌ C++ server not running on port 9090');
+                    console.error(`❌ [${sessionId}] C++ server not running on port 9090`);
                     ws.send(JSON.stringify({
                         type: 'error',
-                        message: 'C++ server not running. Start webrtc_server.exe on port 9090'
+                        message: 'C++ server not running. Start webrtc_server.exe on port 9090',
+                        sessionId: sessionId
                     }));
                 } else if (error.response) {
-                    console.error('❌ C++ server error:', error.response.status, error.response.data);
+                    console.error(`❌ [${sessionId}] C++ server error:`, error.response.status, error.response.data);
                     ws.send(JSON.stringify({
                         type: 'error',
-                        message: `C++ server error: ${error.response.status}`
+                        message: `C++ server error: ${error.response.status}`,
+                        sessionId: sessionId
                     }));
                 } else {
-                    console.error('❌ Error connecting to C++ server:', error.message);
+                    console.error(`❌ [${sessionId}] Error connecting to C++ server:`, error.message);
                     ws.send(JSON.stringify({
                         type: 'error',
-                        message: error.message
+                        message: error.message,
+                        sessionId: sessionId
                     }));
                 }
             }
             
         } catch (error) {
-            console.error('❌ Error processing message:', error);
+            console.error(`❌ [${sessionId}] Error processing message:`, error);
         }
     });
     
-    ws.on('close', () => {
-        console.log('👋 Browser disconnected from relay');
+    ws.on('close', async () => {
+        console.log(`👋 [${sessionId}] Browser disconnected`);
+        
+        // Notify C++ server to clean up this session
+        try {
+            await axios.post(`${CPP_SERVER}/signaling`, {
+                type: 'close',
+                sessionId: sessionId
+            }, {
+                timeout: 1000,
+                headers: { 'Content-Type': 'application/json' }
+            });
+            console.log(`🧹 [${sessionId}] Cleanup notification sent to C++`);
+        } catch (error) {
+            // Ignore cleanup errors
+        }
     });
     
     ws.on('error', (error) => {
-        console.error('❌ WebSocket error:', error);
+        console.error(`❌ [${sessionId}] WebSocket error:`, error);
     });
 });
 

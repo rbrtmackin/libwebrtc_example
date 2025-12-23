@@ -17,6 +17,7 @@
 #include <string>
 #include <sstream>
 #include <mutex>
+#include <map>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -31,7 +32,8 @@
 // Global state
 std::atomic<bool> g_running(true);
 std::shared_ptr<TestVideoSource> g_video_source;
-std::shared_ptr<PeerConnectionHandler> g_peer_handler;
+std::map<std::string, std::shared_ptr<PeerConnectionHandler>> g_peer_handlers;  // Support multiple clients
+std::mutex g_peers_mutex;
 rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> g_factory;
 
 // Threads
@@ -128,8 +130,14 @@ std::mutex g_answer_mutex;
 
 std::string HandleSignalingMessage(const std::string& body) {
     std::string type = ExtractJsonField(body, "type");
+    std::string sessionId = ExtractJsonField(body, "sessionId");
     
-    std::cout << "Received signaling message: " << type << std::endl;
+    // Generate session ID if not provided
+    if (sessionId.empty()) {
+        sessionId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    }
+    
+    std::cout << "Session [" << sessionId << "] - Message: " << type << std::endl;
     std::cout << "Body length: " << body.length() << " bytes" << std::endl;
     
     if (type == "offer") {
@@ -141,35 +149,38 @@ std::string HandleSignalingMessage(const std::string& body) {
         }
         
         if (!sdp.empty()) {
-            // Create peer handler if it doesn't exist
-            if (!g_peer_handler && g_factory && g_video_source) {
-                std::cout << "Creating peer connection handler..." << std::endl;
+            std::lock_guard<std::mutex> lock(g_peers_mutex);
+            
+            // Create peer handler for this client
+            if (g_peer_handlers.find(sessionId) == g_peer_handlers.end() && g_factory && g_video_source) {
+                std::cout << "Creating peer connection handler for session " << sessionId << "..." << std::endl;
                 
-                auto callback = [](const std::string& msg_type, const std::string& message) {
-                    std::cout << "Signaling callback: " << msg_type << std::endl;
+                auto callback = [sessionId](const std::string& msg_type, const std::string& message) {
+                    std::cout << "Session [" << sessionId << "] callback: " << msg_type << std::endl;
                     
                     // Store the answer to send back
                     if (msg_type == "answer") {
                         std::lock_guard<std::mutex> lock(g_answer_mutex);
                         std::string escaped_sdp = EscapeJson(message);
-                        g_pending_answer = "{\"type\":\"answer\",\"sdp\":\"" + escaped_sdp + "\"}";
-                        std::cout << "Answer ready to send" << std::endl;
+                        g_pending_answer = "{\"type\":\"answer\",\"sdp\":\"" + escaped_sdp + "\",\"sessionId\":\"" + sessionId + "\"}";
+                        std::cout << "Answer ready for session " << sessionId << std::endl;
                     }
                 };
                 
-                g_peer_handler = std::make_shared<PeerConnectionHandler>(
+                g_peer_handlers[sessionId] = std::make_shared<PeerConnectionHandler>(
                     g_factory,
                     g_video_source,
                     callback
                 );
                 
-                std::cout << "Peer connection handler created" << std::endl;
+                std::cout << "Peer connection handler created. Total clients: " << g_peer_handlers.size() << std::endl;
             }
             
             // Handle the offer
-            if (g_peer_handler) {
-                std::cout << "Processing offer..." << std::endl;
-                g_peer_handler->HandleOffer(sdp);
+            auto it = g_peer_handlers.find(sessionId);
+            if (it != g_peer_handlers.end()) {
+                std::cout << "Processing offer for session " << sessionId << "..." << std::endl;
+                it->second->HandleOffer(sdp);
                 
                 // Wait a bit for answer to be generated
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -179,14 +190,14 @@ std::string HandleSignalingMessage(const std::string& body) {
                 if (!g_pending_answer.empty()) {
                     std::string answer = g_pending_answer;
                     g_pending_answer.clear();
-                    std::cout << "Sending answer back to browser" << std::endl;
+                    std::cout << "Sending answer back to browser for session " << sessionId << std::endl;
                     return answer;
                 }
             }
         } else {
             std::cout << "ERROR: SDP is empty!" << std::endl;
         }
-        return "{\"type\":\"error\",\"message\":\"Failed to process offer\"}";
+        return "{\"type\":\"error\",\"message\":\"Failed to process offer\",\"sessionId\":\"" + sessionId + "\"}";
     }
     else if (type == "ice-candidate") {
         std::string candidate = ExtractJsonField(body, "candidate");
@@ -199,16 +210,28 @@ std::string HandleSignalingMessage(const std::string& body) {
             sdpMLineIndex = std::stoi(mlineStr);
         }
         
-        if (g_peer_handler && !candidate.empty()) {
-            std::cout << "Adding ICE candidate" << std::endl;
-            g_peer_handler->HandleIceCandidate(candidate, sdpMid, sdpMLineIndex);
+        std::lock_guard<std::mutex> lock(g_peers_mutex);
+        auto it = g_peer_handlers.find(sessionId);
+        if (it != g_peer_handlers.end() && !candidate.empty()) {
+            std::cout << "Adding ICE candidate for session " << sessionId << std::endl;
+            it->second->HandleIceCandidate(candidate, sdpMid, sdpMLineIndex);
         }
         
-        return "{\"type\":\"ok\"}";
+        return "{\"type\":\"ok\",\"sessionId\":\"" + sessionId + "\"}";
+    }
+    else if (type == "close") {
+        std::lock_guard<std::mutex> lock(g_peers_mutex);
+        auto it = g_peer_handlers.find(sessionId);
+        if (it != g_peer_handlers.end()) {
+            std::cout << "Closing session " << sessionId << std::endl;
+            g_peer_handlers.erase(it);
+            std::cout << "Session closed. Remaining clients: " << g_peer_handlers.size() << std::endl;
+        }
+        return "{\"type\":\"ok\",\"sessionId\":\"" + sessionId + "\"}";
     }
     
     std::cout << "Unknown message type: " << type << std::endl;
-    return "{\"type\":\"error\",\"message\":\"Unknown message type\"}";
+    return "{\"type\":\"error\",\"message\":\"Unknown message type\",\"sessionId\":\"" + sessionId + "\"}";
 }
 
 void RunHTTPServer(int port) {
@@ -328,16 +351,26 @@ void RunHTTPServer(int port) {
 }
 
 int main(int argc, char* argv[]) {
-    // Configuration
-	 /*
-    const int WIDTH = 1920;
-    const int HEIGHT = 1080;
-    const int FPS = 30;
-	 */
-    const int WIDTH = 3840;
-    const int HEIGHT = 2160;
-    const int FPS = 30;
+    // Default configuration - can be overridden with command line args
+    int WIDTH = 1920;   
+    int HEIGHT = 1080;  
+    int FPS = 30;       
     const int HTTP_PORT = 9090;
+    
+    // Parse command line arguments
+    // Usage: webrtc_server.exe [width] [height] [fps]
+    // Example: webrtc_server.exe 1920 1080 30
+    // Example: webrtc_server.exe 3840 2160 60
+    if (argc >= 4) {
+        WIDTH = std::atoi(argv[1]);
+        HEIGHT = std::atoi(argv[2]);
+        FPS = std::atoi(argv[3]);
+    } else if (argc >= 2) {
+        std::cout << "Usage: " << argv[0] << " [width] [height] [fps]\n";
+        std::cout << "Example: " << argv[0] << " 1920 1080 30\n";
+        std::cout << "Example: " << argv[0] << " 3840 2160 60\n";
+        std::cout << "Using defaults...\n\n";
+    }
     
     std::cout << "========================================\n";
     std::cout << "WebRTC C++ Server with libwebrtc + STUN\n";
@@ -403,12 +436,43 @@ int main(int argc, char* argv[]) {
         std::cout << "Waiting for browser connections on port " << HTTP_PORT << "...\n\n";
         std::cout << "Press Ctrl+C to stop...\n\n";
         
+        // Start stats reporting thread
+        std::thread stats_thread([&]() {
+            while (g_running) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                
+                std::lock_guard<std::mutex> lock(g_peers_mutex);
+                if (!g_peer_handlers.empty()) {
+                    std::cout << "\n========== SERVER STATS ==========\n";
+                    std::cout << "Active Clients: " << g_peer_handlers.size() << "\n";
+                    std::cout << "Video Source: " << WIDTH << "x" << HEIGHT << " @ " << FPS << " FPS\n";
+                    std::cout << "Frames Generated: " << g_video_source->GetFramesSent() << "\n";
+                    std::cout << "Expected Bitrate Per Client: ~" 
+                              << (WIDTH * HEIGHT * FPS * 0.1 / 1000000) << " Mbps\n";
+                    std::cout << "Expected Aggregate Bitrate: ~" 
+                              << (WIDTH * HEIGHT * FPS * 0.1 / 1000000 * g_peer_handlers.size()) << " Mbps\n";
+                    std::cout << "==================================\n\n";
+                }
+            }
+        });
+        
         // Run HTTP server
         RunHTTPServer(HTTP_PORT);
         
+        // Wait for stats thread
+        g_running = false;
+        if (stats_thread.joinable()) {
+            stats_thread.join();
+        }
+        
         // Cleanup
         std::cout << "\nCleaning up...\n";
-        g_peer_handler.reset();
+        {
+            std::lock_guard<std::mutex> lock(g_peers_mutex);
+            g_peer_handlers.clear();
+        }
+        
+        int total_frames = g_video_source->GetFramesSent();
         g_video_source->Stop();
         g_video_source.reset();
         g_factory = nullptr;
@@ -421,7 +485,7 @@ int main(int argc, char* argv[]) {
         g_worker_thread.reset();
         g_network_thread.reset();
         
-        std::cout << "Total frames generated: " << g_video_source->GetFramesSent() << "\n";
+        std::cout << "Total frames generated: " << total_frames << "\n";
 
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
