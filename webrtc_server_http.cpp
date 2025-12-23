@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <string>
 #include <sstream>
+#include <mutex>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -44,46 +45,169 @@ void SignalHandler(int signal) {
 }
 
 std::string ExtractJsonField(const std::string& json, const std::string& field) {
-    // Simple JSON parsing (replace with proper parser in production)
-    std::string search = "\"" + field + "\":";
+    // Simple JSON parsing - look for "field":"value" or "field":value
+    std::string search = "\"" + field + "\"";
     size_t pos = json.find(search);
     if (pos == std::string::npos) return "";
     
     pos += search.length();
-    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
     
+    // Skip whitespace and colon
+    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == ':')) pos++;
+    
+    if (pos >= json.length()) return "";
+    
+    // Check if it's a string (starts with quote)
     if (json[pos] == '"') {
-        pos++;
-        size_t end = json.find('"', pos);
-        if (end != std::string::npos) {
-            return json.substr(pos, end - pos);
+        pos++; // Skip opening quote
+        size_t end = pos;
+        
+        // Find closing quote, handling escaped quotes
+        while (end < json.length()) {
+            if (json[end] == '"' && (end == pos || json[end-1] != '\\')) {
+                break;
+            }
+            end++;
         }
+        
+        if (end < json.length()) {
+            std::string result = json.substr(pos, end - pos);
+            
+            // Unescape common sequences
+            size_t escPos = 0;
+            while ((escPos = result.find("\\n", escPos)) != std::string::npos) {
+                result.replace(escPos, 2, "\n");
+                escPos++;
+            }
+            escPos = 0;
+            while ((escPos = result.find("\\r", escPos)) != std::string::npos) {
+                result.replace(escPos, 2, "\r");
+                escPos++;
+            }
+            escPos = 0;
+            while ((escPos = result.find("\\\"", escPos)) != std::string::npos) {
+                result.replace(escPos, 2, "\"");
+                escPos++;
+            }
+            escPos = 0;
+            while ((escPos = result.find("\\\\", escPos)) != std::string::npos) {
+                result.replace(escPos, 2, "\\");
+                escPos++;
+            }
+            
+            return result;
+        }
+    }
+    // Check if it's a number
+    else if (isdigit(json[pos]) || json[pos] == '-') {
+        size_t end = pos;
+        while (end < json.length() && (isdigit(json[end]) || json[end] == '.' || json[end] == '-')) {
+            end++;
+        }
+        return json.substr(pos, end - pos);
     }
     
     return "";
 }
 
+std::string EscapeJson(const std::string& str) {
+    std::string result;
+    for (char c : str) {
+        if (c == '"') result += "\\\"";
+        else if (c == '\\') result += "\\\\";
+        else if (c == '\n') result += "\\n";
+        else if (c == '\r') result += "\\r";
+        else if (c == '\t') result += "\\t";
+        else result += c;
+    }
+    return result;
+}
+
+std::string g_pending_answer;  // Store answer to send back
+std::mutex g_answer_mutex;
+
 std::string HandleSignalingMessage(const std::string& body) {
     std::string type = ExtractJsonField(body, "type");
     
     std::cout << "Received signaling message: " << type << std::endl;
+    std::cout << "Body length: " << body.length() << " bytes" << std::endl;
     
     if (type == "offer") {
         std::string sdp = ExtractJsonField(body, "sdp");
-        if (!sdp.empty() && g_peer_handler) {
-            g_peer_handler->HandleOffer(sdp);
-            // Response will be sent via the callback
-            return "{\"type\":\"processing\"}";
+        std::cout << "Extracted SDP length: " << sdp.length() << " bytes" << std::endl;
+        
+        if (sdp.length() > 100) {
+            std::cout << "SDP preview: " << sdp.substr(0, 100) << "..." << std::endl;
         }
+        
+        if (!sdp.empty()) {
+            // Create peer handler if it doesn't exist
+            if (!g_peer_handler && g_factory && g_video_source) {
+                std::cout << "Creating peer connection handler..." << std::endl;
+                
+                auto callback = [](const std::string& msg_type, const std::string& message) {
+                    std::cout << "Signaling callback: " << msg_type << std::endl;
+                    
+                    // Store the answer to send back
+                    if (msg_type == "answer") {
+                        std::lock_guard<std::mutex> lock(g_answer_mutex);
+                        std::string escaped_sdp = EscapeJson(message);
+                        g_pending_answer = "{\"type\":\"answer\",\"sdp\":\"" + escaped_sdp + "\"}";
+                        std::cout << "Answer ready to send" << std::endl;
+                    }
+                };
+                
+                g_peer_handler = std::make_shared<PeerConnectionHandler>(
+                    g_factory,
+                    g_video_source,
+                    callback
+                );
+                
+                std::cout << "Peer connection handler created" << std::endl;
+            }
+            
+            // Handle the offer
+            if (g_peer_handler) {
+                std::cout << "Processing offer..." << std::endl;
+                g_peer_handler->HandleOffer(sdp);
+                
+                // Wait a bit for answer to be generated
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                
+                // Return the answer
+                std::lock_guard<std::mutex> lock(g_answer_mutex);
+                if (!g_pending_answer.empty()) {
+                    std::string answer = g_pending_answer;
+                    g_pending_answer.clear();
+                    std::cout << "Sending answer back to browser" << std::endl;
+                    return answer;
+                }
+            }
+        } else {
+            std::cout << "ERROR: SDP is empty!" << std::endl;
+        }
+        return "{\"type\":\"error\",\"message\":\"Failed to process offer\"}";
     }
     else if (type == "ice-candidate") {
         std::string candidate = ExtractJsonField(body, "candidate");
         std::string sdpMid = ExtractJsonField(body, "sdpMid");
-        // Handle ICE candidate
-        // g_peer_handler->HandleIceCandidate(candidate, sdpMid, 0);
+        
+        // Extract sdpMLineIndex
+        std::string mlineStr = ExtractJsonField(body, "sdpMLineIndex");
+        int sdpMLineIndex = 0;
+        if (!mlineStr.empty()) {
+            sdpMLineIndex = std::stoi(mlineStr);
+        }
+        
+        if (g_peer_handler && !candidate.empty()) {
+            std::cout << "Adding ICE candidate" << std::endl;
+            g_peer_handler->HandleIceCandidate(candidate, sdpMid, sdpMLineIndex);
+        }
+        
         return "{\"type\":\"ok\"}";
     }
     
+    std::cout << "Unknown message type: " << type << std::endl;
     return "{\"type\":\"error\",\"message\":\"Unknown message type\"}";
 }
 

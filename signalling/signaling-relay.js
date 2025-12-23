@@ -34,11 +34,17 @@ wss.on('connection', (ws) => {
             
             // Forward to C++ server via HTTP POST
             try {
+                console.log(`🔄 Forwarding to C++ server at ${CPP_SERVER}/signaling`);
+                
                 const response = await axios.post(`${CPP_SERVER}/signaling`, data, {
-                    timeout: 5000
+                    timeout: 5000,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
                 });
                 
                 console.log(`📬 From C++ server: ${response.data.type}`);
+                console.log(`📤 Sending to browser:`, JSON.stringify(response.data).substring(0, 100) + '...');
                 
                 // Send C++ response back to browser
                 ws.send(JSON.stringify(response.data));
@@ -50,8 +56,18 @@ wss.on('connection', (ws) => {
                         type: 'error',
                         message: 'C++ server not running. Start webrtc_server.exe on port 9090'
                     }));
+                } else if (error.response) {
+                    console.error('❌ C++ server error:', error.response.status, error.response.data);
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: `C++ server error: ${error.response.status}`
+                    }));
                 } else {
                     console.error('❌ Error connecting to C++ server:', error.message);
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: error.message
+                    }));
                 }
             }
             

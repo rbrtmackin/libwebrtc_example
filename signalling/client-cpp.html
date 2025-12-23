@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC C++ libwebrtc Test with STUN</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .info {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .status {
+            text-align: center;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        .status.disconnected { background-color: #f8d7da; color: #721c24; }
+        .status.connecting { background-color: #fff3cd; color: #856404; }
+        .status.connected { background-color: #d4edda; color: #155724; }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 0 10px;
+        }
+        button:hover { background-color: #45a049; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        video {
+            width: 100%;
+            max-width: 960px;
+            background-color: #000;
+            border-radius: 8px;
+            display: block;
+            margin: 20px auto;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 15px;
+            border-radius: 8px;
+            color: white;
+        }
+        .stat-card h4 {
+            margin: 0 0 10px 0;
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 WebRTC C++ libwebrtc Test with STUN</h1>
+        
+        <div class="info">
+            <strong>💡 Architecture:</strong>
+            <ul>
+                <li>Browser ←WebSocket→ Node.js Relay (port 8080)</li>
+                <li>Node.js Relay ←HTTP→ C++ Server (port 9090)</li>
+                <li>C++ Server uses bengreenier/webrtc + STUN</li>
+            </ul>
+        </div>
+        
+        <div id="status" class="status disconnected">⚫ Not Connected</div>
+        
+        <div class="controls">
+            <button id="startBtn" onclick="start()">▶️ Start Stream</button>
+            <button id="stopBtn" onclick="stop()" disabled>⏹️ Stop Stream</button>
+        </div>
+        
+        <video id="remoteVideo" autoplay playsinline></video>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <h4>CONNECTION STATE</h4>
+                <div class="stat-value" id="connState">new</div>
+            </div>
+            <div class="stat-card">
+                <h4>ICE STATE</h4>
+                <div class="stat-value" id="iceState">new</div>
+            </div>
+            <div class="stat-card">
+                <h4>BITRATE</h4>
+                <div class="stat-value"><span id="bitrate">0.00</span> Mbps</div>
+            </div>
+            <div class="stat-card">
+                <h4>FPS</h4>
+                <div class="stat-value"><span id="fps">0</span> fps</div>
+            </div>
+            <div class="stat-card">
+                <h4>RESOLUTION</h4>
+                <div class="stat-value" id="resolution">-</div>
+            </div>
+            <div class="stat-card">
+                <h4>PACKET LOSS</h4>
+                <div class="stat-value"><span id="packetsLost">0</span> pkts</div>
+            </div>
+            <div class="stat-card">
+                <h4>JITTER</h4>
+                <div class="stat-value"><span id="jitter">0</span> ms</div>
+            </div>
+            <div class="stat-card">
+                <h4>DATA RECEIVED</h4>
+                <div class="stat-value"><span id="bytesReceived">0</span> MB</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let pc = null;
+        let statsInterval = null;
+        let lastBytesReceived = 0;
+        let lastTimestamp = 0;
+        
+        const config = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+        
+        function updateStatus(text, className) {
+            const status = document.getElementById('status');
+            const icons = { 'connecting': '🟡', 'connected': '🟢', 'disconnected': '🔴' };
+            status.textContent = icons[className] + ' ' + text;
+            status.className = 'status ' + className;
+        }
+        
+        async function start() {
+            try {
+                updateStatus('Connecting to signaling relay...', 'connecting');
+                document.getElementById('startBtn').disabled = true;
+                
+                // Connect to Node.js relay
+                ws = new WebSocket('ws://localhost:8080');
+                
+                ws.onopen = () => {
+                    console.log('✅ WebSocket connected to Node.js relay');
+                    createPeerConnection();
+                };
+                
+                ws.onmessage = async (event) => {
+                    const data = JSON.parse(event.data);
+                    console.log('📬 Received from C++ server:', data.type);
+                    
+                    if (data.type === 'answer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription({
+                            type: 'answer',
+                            sdp: data.sdp
+                        }));
+                        console.log('✅ Set remote description (answer from C++)');
+                    } else if (data.type === 'ice-candidate') {
+                        await pc.addIceCandidate(new RTCIceCandidate({
+                            candidate: data.candidate,
+                            sdpMid: data.sdpMid,
+                            sdpMLineIndex: data.sdpMLineIndex
+                        }));
+                        console.log('✅ Added ICE candidate from C++');
+                    } else if (data.type === 'error') {
+                        console.error('❌ Error from server:', data.message);
+                        updateStatus('Server error: ' + data.message, 'disconnected');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    console.error('❌ WebSocket error:', error);
+                    updateStatus('Connection error - Is Node.js relay running?', 'disconnected');
+                    document.getElementById('startBtn').disabled = false;
+                };
+                
+                ws.onclose = () => {
+                    console.log('👋 WebSocket closed');
+                    if (pc && pc.connectionState !== 'closed') {
+                        updateStatus('Signaling disconnected', 'disconnected');
+                    }
+                };
+                
+            } catch (error) {
+                console.error('❌ Error:', error);
+                updateStatus('Error: ' + error.message, 'disconnected');
+                document.getElementById('startBtn').disabled = false;
+            }
+        }
+        
+        async function createPeerConnection() {
+            pc = new RTCPeerConnection(config);
+            console.log('✅ Created peer connection with STUN');
+            
+            // Handle incoming tracks from C++ server
+            pc.ontrack = (event) => {
+                console.log('🎥 Received video track from C++ server');
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+                updateStatus('Connected - Receiving from C++ libwebrtc', 'connected');
+                document.getElementById('stopBtn').disabled = false;
+                startStats();
+            };
+            
+            // Connection state
+            pc.onconnectionstatechange = () => {
+                console.log('🔗 Connection state:', pc.connectionState);
+                document.getElementById('connState').textContent = pc.connectionState;
+                
+                if (pc.connectionState === 'connected') {
+                    updateStatus('Connected - C++ libwebrtc streaming', 'connected');
+                } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                    updateStatus('Connection failed', 'disconnected');
+                }
+            };
+            
+            // ICE state
+            pc.oniceconnectionstatechange = () => {
+                console.log('🧊 ICE state:', pc.iceConnectionState);
+                document.getElementById('iceState').textContent = pc.iceConnectionState;
+            };
+            
+            // ICE candidates
+            pc.onicecandidate = (event) => {
+                if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    }));
+                    console.log('📤 Sent ICE candidate to C++ (via relay)');
+                }
+            };
+            
+            // Create offer to send to C++ server
+            const offer = await pc.createOffer({
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: false
+            });
+            
+            await pc.setLocalDescription(offer);
+            console.log('✅ Created offer, sending to C++ server via relay');
+            
+            // Send offer through Node.js relay to C++ server
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'offer',
+                    sdp: offer.sdp
+                }));
+                console.log('📤 Offer sent to C++ server (via Node.js relay)');
+            }
+        }
+        
+        function startStats() {
+            statsInterval = setInterval(async () => {
+                if (!pc) return;
+                
+                try {
+                    const stats = await pc.getStats();
+                    stats.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            // FPS
+                            const fps = report.framesPerSecond || 0;
+                            document.getElementById('fps').textContent = fps.toFixed(1);
+                            
+                            // Bitrate
+                            if (lastBytesReceived && lastTimestamp) {
+                                const bytes = (report.bytesReceived || 0) - lastBytesReceived;
+                                const time = (report.timestamp - lastTimestamp) / 1000;
+                                if (time > 0) {
+                                    const bitrate = (bytes * 8) / (time * 1000000);
+                                    document.getElementById('bitrate').textContent = bitrate.toFixed(2);
+                                }
+                            }
+                            
+                            lastBytesReceived = report.bytesReceived || 0;
+                            lastTimestamp = report.timestamp;
+                            
+                            // Data
+                            const mb = (report.bytesReceived / (1024 * 1024)).toFixed(2);
+                            document.getElementById('bytesReceived').textContent = mb;
+                            
+                            // Packet loss
+                            document.getElementById('packetsLost').textContent = report.packetsLost || 0;
+                            
+                            // Jitter
+                            const jitterMs = (report.jitter || 0) * 1000;
+                            document.getElementById('jitter').textContent = jitterMs.toFixed(2);
+                        }
+                    });
+                    
+                    // Resolution
+                    const video = document.getElementById('remoteVideo');
+                    if (video.videoWidth && video.videoHeight) {
+                        document.getElementById('resolution').textContent = 
+                            video.videoWidth + 'x' + video.videoHeight;
+                    }
+                    
+                } catch (error) {
+                    console.error('Stats error:', error);
+                }
+            }, 1000);
+        }
+        
+        function stop() {
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            
+            document.getElementById('remoteVideo').srcObject = null;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            updateStatus('Disconnected', 'disconnected');
+            
+            lastBytesReceived = 0;
+            lastTimestamp = 0;
+        }
+        
+        window.addEventListener('beforeunload', stop);
+    </script>
+</body>
+</html>
