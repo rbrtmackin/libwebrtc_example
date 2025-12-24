@@ -13,6 +13,8 @@
 
 #include <atomic>
 #include <memory>
+#include <cstdlib> // Required for rand() and srand()
+#include <ctime>   // Required for time()
 
 // Video track source that generates test frames
 // Inherits from VideoTrackSourceInterface for compatibility with CreateVideoTrack
