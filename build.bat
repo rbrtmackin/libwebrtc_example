@@ -52,9 +52,10 @@ if errorlevel 1 (
     )
 )
 
+set BUILD_TYPE=Release
 echo.
-echo Building Release configuration...
-cmake --build . --config Release
+echo Building %BUILD_TYPE% configuration...
+cmake --build . --config %BUILD_TYPE%
 
 if errorlevel 1 (
     echo.
@@ -68,11 +69,11 @@ echo ========================================
 echo Build Successful!
 echo ========================================
 echo.
-echo Executable: bin\Release\webrtc_server.exe
+echo Executable: bin\%BUILD_TYPE%\webrtc_server.exe
 echo HTML Client: bin\client.html
 echo.
 echo To run:
-echo   cd bin\Release
+echo   cd bin\%BUILD_TYPE%
 echo   webrtc_server.exe
 echo.
 echo Then open in browser: http://localhost:8080/

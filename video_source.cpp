@@ -15,7 +15,7 @@ TestVideoSource::TestVideoSource(int width, int height, int fps)
       running_(false),
       frames_sent_(0)
 {
-      std::srand(static_cast<unsigned int>(std::time(nullptr)));
+    //std::srand(static_cast<unsigned int>(std::time(nullptr)));
     // Create a dedicated thread for frame generation
     frame_thread_ = rtc::Thread::Create();
     frame_thread_->SetName("FrameGenerator", nullptr);
@@ -96,7 +96,7 @@ void TestVideoSource::GenerateFrames() {
         int y_size = width_ * height_;
         for (int i = 0; i < y_size; i++) {
           uint8_t pix_val = static_cast<uint8_t>((i + frames_sent_) % 256);
-          if ((i / height_ < 0.2 * height_) && i % (height_ < 0.2 * width_)) {
+          if (((i / width_) < (0.4 * height_)) && ((i % width_) < 0.4 * width_)) {
                pix_val =  static_cast<uint8_t>(std::rand() % 256);
           }
           y_data[i] = pix_val;
