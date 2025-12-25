@@ -2,6 +2,7 @@
 // Implementation of WebRTC peer connection handler
 
 #include "peer_connection_handler.h"
+#include "encoded_video_source.h"
 #include <rtc_base/logging.h>
 #include <api/video_codecs/builtin_video_encoder_factory.h>
 #include <api/video_codecs/builtin_video_decoder_factory.h>
@@ -81,7 +82,7 @@ void SetSDPObserver::OnFailure(webrtc::RTCError error) {
 // PeerConnectionHandler implementation
 PeerConnectionHandler::PeerConnectionHandler(
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory,
-    std::shared_ptr<TestVideoSource> video_source,
+    std::shared_ptr<EncodedVideoSource> video_source,
     SignalingCallback signaling_callback)
     : factory_(factory),
       video_source_(video_source),

@@ -1,7 +1,7 @@
 // webrtc_server_http.cpp
 // C++ WebRTC server with simple HTTP signaling (no WebSocket needed!)
 
-#include "video_source.h"
+#include "encoded_video_source.h"
 #include "peer_connection_handler.h"
 #include "simple_video_factories.h"
 
@@ -31,7 +31,7 @@
 
 // Global state
 std::atomic<bool> g_running(true);
-std::shared_ptr<TestVideoSource> g_video_source;
+std::shared_ptr<EncodedVideoSource> g_video_source;
 std::map<std::string, std::shared_ptr<PeerConnectionHandler>> g_peer_handlers;  // Support multiple clients
 std::mutex g_peers_mutex;
 rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> g_factory;
@@ -352,9 +352,9 @@ void RunHTTPServer(int port) {
 
 int main(int argc, char* argv[]) {
     // Default configuration - can be overridden with command line args
-    int WIDTH = 1920;   
-    int HEIGHT = 1080;  
-    int FPS = 30;       
+    int WIDTH = 3840;   // 4K width
+    int HEIGHT = 2160;  // 4K height  
+    int FPS = 60;       // 60 FPS
     const int HTTP_PORT = 9090;
     
     // Parse command line arguments
@@ -427,10 +427,11 @@ int main(int argc, char* argv[]) {
         
         std::cout << "Peer connection factory created\n";
         
-        // Create video source
-        g_video_source = std::make_shared<TestVideoSource>(WIDTH, HEIGHT, FPS);
+        // Create encoded video source (reuses same frame data - MUCH more efficient!)
+        g_video_source = std::make_shared<EncodedVideoSource>(WIDTH, HEIGHT, FPS, 30);  // GOP size = 30
         g_video_source->Start();
-        std::cout << "Video source started\n\n";
+        std::cout << "Encoded video source started (ZERO-COPY MODE)\n";
+        std::cout << "Using same frame buffer repeatedly - encoder optimized\n\n";
         
         std::cout << "Server running!\n";
         std::cout << "Waiting for browser connections on port " << HTTP_PORT << "...\n\n";

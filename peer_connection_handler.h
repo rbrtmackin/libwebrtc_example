@@ -4,15 +4,18 @@
 #ifndef PEER_CONNECTION_HANDLER_H
 #define PEER_CONNECTION_HANDLER_H
 
-#include "video_source.h"
 #include "throughput_receiver.h"
 
 #include <api/peer_connection_interface.h>
 #include <api/create_peerconnection_factory.h>
+#include <api/media_stream_interface.h>
 #include <rtc_base/thread.h>
 
 #include <memory>
 #include <functional>
+
+// Forward declaration
+class EncodedVideoSource;
 
 // Callback for sending signaling messages
 using SignalingCallback = std::function<void(const std::string& type, const std::string& message)>;
@@ -77,7 +80,7 @@ class PeerConnectionHandler {
 public:
     PeerConnectionHandler(
         rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory,
-        std::shared_ptr<TestVideoSource> video_source,
+        std::shared_ptr<EncodedVideoSource> video_source,
         SignalingCallback signaling_callback);
     ~PeerConnectionHandler();
 
@@ -93,7 +96,7 @@ private:
     
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
-    std::shared_ptr<TestVideoSource> video_source_;
+    std::shared_ptr<EncodedVideoSource> video_source_;
     std::shared_ptr<ThroughputReceiver> receiver_;
     std::unique_ptr<PeerObserver> observer_;
     SignalingCallback signaling_callback_;

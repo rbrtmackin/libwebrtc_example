@@ -18,6 +18,7 @@ include_directories(
 set(SERVER_SOURCES
     webrtc_server_http.cpp
     video_source.cpp
+    encoded_video_source.cpp
     throughput_receiver.cpp
     peer_connection_handler.cpp
 )
@@ -25,6 +26,7 @@ set(SERVER_SOURCES
 # Header files
 set(SERVER_HEADERS
     video_source.h
+    encoded_video_source.h
     throughput_receiver.h
     peer_connection_handler.h
     simple_video_factories.h
