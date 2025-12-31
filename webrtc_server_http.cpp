@@ -17,6 +17,7 @@
 #include <string>
 #include <sstream>
 #include <mutex>
+#include <condition_variable>
 #include <map>
 
 #ifdef _WIN32
@@ -127,6 +128,7 @@ std::string EscapeJson(const std::string& str) {
 
 std::string g_pending_answer;  // Store answer to send back
 std::mutex g_answer_mutex;
+std::condition_variable g_answer_cv;  // Signal when answer is ready
 
 std::string HandleSignalingMessage(const std::string& body) {
     std::string type = ExtractJsonField(body, "type");
@@ -164,6 +166,7 @@ std::string HandleSignalingMessage(const std::string& body) {
                         std::string escaped_sdp = EscapeJson(message);
                         g_pending_answer = "{\"type\":\"answer\",\"sdp\":\"" + escaped_sdp + "\",\"sessionId\":\"" + sessionId + "\"}";
                         std::cout << "Answer ready for session " << sessionId << std::endl;
+                        g_answer_cv.notify_all();  // Wake up waiting thread
                     }
                 };
                 
@@ -180,18 +183,31 @@ std::string HandleSignalingMessage(const std::string& body) {
             auto it = g_peer_handlers.find(sessionId);
             if (it != g_peer_handlers.end()) {
                 std::cout << "Processing offer for session " << sessionId << "..." << std::endl;
+                
+                // Clear any old pending answer
+                {
+                    std::lock_guard<std::mutex> lock(g_answer_mutex);
+                    g_pending_answer.clear();
+                }
+                
                 it->second->HandleOffer(sdp);
                 
-                // Wait a bit for answer to be generated
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::cout << "Waiting for answer..." << std::endl;
                 
-                // Return the answer
-                std::lock_guard<std::mutex> lock(g_answer_mutex);
-                if (!g_pending_answer.empty()) {
+                // Wait for answer (should come quickly - within 2 seconds)
+                std::unique_lock<std::mutex> lock(g_answer_mutex);
+                auto timeout = std::chrono::seconds(2);
+                
+                if (g_answer_cv.wait_for(lock, timeout, []{ return !g_pending_answer.empty(); })) {
+                    // Answer received
                     std::string answer = g_pending_answer;
                     g_pending_answer.clear();
-                    std::cout << "Sending answer back to browser for session " << sessionId << std::endl;
+                    std::cout << "✅ Sending answer back to browser for session " << sessionId << std::endl;
                     return answer;
+                } else {
+                    // Timeout
+                    std::cout << "❌ ERROR: Timeout waiting for answer after 2 seconds!" << std::endl;
+                    return "{\"type\":\"error\",\"message\":\"Timeout creating answer\",\"sessionId\":\"" + sessionId + "\"}";
                 }
             }
         } else {

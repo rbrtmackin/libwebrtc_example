@@ -14,8 +14,9 @@
 #include <memory>
 #include <functional>
 
-// Forward declaration
+// Forward declarations
 class EncodedVideoSource;
+class PeerConnectionHandler;
 
 // Callback for sending signaling messages
 using SignalingCallback = std::function<void(const std::string& type, const std::string& message)>;
@@ -27,6 +28,7 @@ public:
     ~PeerObserver() override = default;
 
     void SetThroughputReceiver(std::shared_ptr<ThroughputReceiver> receiver);
+    void SetPeerConnectionHandler(PeerConnectionHandler* handler);
 
     // PeerConnectionObserver implementation
     void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override;
@@ -40,6 +42,11 @@ public:
 private:
     SignalingCallback signaling_callback_;
     std::shared_ptr<ThroughputReceiver> receiver_;
+    bool answer_created_;
+    bool gathering_complete_;
+    PeerConnectionHandler* handler_;
+    
+    friend class PeerConnectionHandler;
 };
 
 // Session description observer callbacks
@@ -87,12 +94,12 @@ public:
     // Handle incoming signaling messages
     void HandleOffer(const std::string& sdp);
     void HandleIceCandidate(const std::string& candidate, const std::string& sdp_mid, int sdp_mline_index);
+    void CreateAnswer();  // Public so observer can call when gathering completes
     
     // Get stats
     std::shared_ptr<ThroughputReceiver> GetReceiver() { return receiver_; }
 
 private:
-    void CreateAnswer();
     
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;

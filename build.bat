@@ -1,4 +1,4 @@
-@echo off
+REM@echo off
 REM Quick build script for WebRTC Server with Web Client
 REM Requires: Visual Studio 2019 or 2022, CMake 3.15+
 
@@ -35,7 +35,7 @@ if not exist build mkdir build
 cd build
 
 echo Running CMake...
-cmake .. -G "Visual Studio 17 2022" -A x64 -DWEBRTC_ROOT=%WEBRTC_ROOT%
+cmake .. -G "Visual Studio 18 2026" -A x64 -DWEBRTC_ROOT=%WEBRTC_ROOT%
 
 if errorlevel 1 (
     echo.

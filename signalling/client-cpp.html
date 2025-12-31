@@ -152,8 +152,7 @@
         
         const config = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' }
             ]
         };
         
@@ -170,7 +169,7 @@
                 document.getElementById('startBtn').disabled = true;
                 
                 // Connect to Node.js relay
-                ws = new WebSocket('ws://localhost:8080');
+                ws = new WebSocket('ws://'+location.hostname+':8080');
                 
                 ws.onopen = () => {
                     console.log('✅ WebSocket connected to Node.js relay');
@@ -206,9 +205,13 @@
                     document.getElementById('startBtn').disabled = false;
                 };
                 
-                ws.onclose = () => {
-                    console.log('👋 WebSocket closed');
-                    if (pc && pc.connectionState !== 'closed') {
+                ws.onclose = (event) => {
+                    console.log('👋 WebSocket closed - Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
+                    // Don't update status if peer connection is still active
+                    if (pc && (pc.connectionState === 'connected' || pc.connectionState === 'connecting')) {
+                        console.log('⚠️ WebSocket closed but peer connection still active - this is OK after signaling');
+                        // Signaling is done, WebRTC direct connection should continue
+                    } else {
                         updateStatus('Signaling disconnected', 'disconnected');
                     }
                 };
@@ -227,7 +230,35 @@
             // Handle incoming tracks from C++ server
             pc.ontrack = (event) => {
                 console.log('🎥 Received video track from C++ server');
-                document.getElementById('remoteVideo').srcObject = event.streams[0];
+                console.log('Track details:', {
+                    kind: event.track.kind,
+                    enabled: event.track.enabled,
+                    readyState: event.track.readyState,
+                    muted: event.track.muted
+                });
+                
+                const videoElement = document.getElementById('remoteVideo');
+                videoElement.srcObject = event.streams[0];
+                
+                // Add video element event handlers
+                videoElement.onloadedmetadata = () => {
+                    console.log('✅ Video metadata loaded');
+                    console.log('Video dimensions:', videoElement.videoWidth + 'x' + videoElement.videoHeight);
+                };
+                
+                videoElement.onplay = () => {
+                    console.log('▶️ Video started playing');
+                };
+                
+                videoElement.onerror = (e) => {
+                    console.error('❌ Video element error:', e);
+                };
+                
+                // Check if track is receiving data
+                event.track.onmute = () => console.warn('⚠️ Track muted');
+                event.track.onunmute = () => console.log('✅ Track unmuted');
+                event.track.onended = () => console.warn('⚠️ Track ended');
+                
                 updateStatus('Connected - Receiving from C++ libwebrtc', 'connected');
                 document.getElementById('stopBtn').disabled = false;
                 startStats();
@@ -253,15 +284,25 @@
             
             // ICE candidates
             pc.onicecandidate = (event) => {
-                if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({
-                        type: 'ice-candidate',
-                        candidate: event.candidate.candidate,
-                        sdpMid: event.candidate.sdpMid,
-                        sdpMLineIndex: event.candidate.sdpMLineIndex
-                    }));
-                    console.log('📤 Sent ICE candidate to C++ (via relay)');
+                if (event.candidate) {
+                    console.log('🧊 Generated ICE candidate:', event.candidate.candidate);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'ice-candidate',
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex
+                        }));
+                        console.log('📤 Sent ICE candidate to C++ (via relay)');
+                    }
+                } else {
+                    console.log('🧊 ICE gathering complete');
                 }
+            };
+            
+            // ICE candidate error
+            pc.onicecandidateerror = (event) => {
+                console.error('❌ ICE candidate error:', event);
             };
             
             // Create offer to send to C++ server
@@ -289,11 +330,24 @@
                 
                 try {
                     const stats = await pc.getStats();
+                    let foundInboundRtp = false;
+                    
                     stats.forEach(report => {
+                        // Debug: Log all report types
+                        if (report.type === 'inbound-rtp' || report.type === 'track') {
+                            console.log('Stats report:', report.type, report);
+                        }
+                        
                         if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            foundInboundRtp = true;
+                            
                             // FPS
                             const fps = report.framesPerSecond || 0;
                             document.getElementById('fps').textContent = fps.toFixed(1);
+                            
+                            // Frames decoded
+                            const framesDecoded = report.framesDecoded || 0;
+                            console.log('Frames decoded:', framesDecoded, 'FPS:', fps);
                             
                             // Bitrate
                             if (lastBytesReceived && lastTimestamp) {
@@ -302,6 +356,7 @@
                                 if (time > 0) {
                                     const bitrate = (bytes * 8) / (time * 1000000);
                                     document.getElementById('bitrate').textContent = bitrate.toFixed(2);
+                                    console.log('Bitrate:', bitrate.toFixed(2), 'Mbps');
                                 }
                             }
                             
@@ -321,11 +376,17 @@
                         }
                     });
                     
+                    if (!foundInboundRtp) {
+                        console.warn('⚠️ No inbound-rtp stats found - no video data flowing');
+                    }
+                    
                     // Resolution
                     const video = document.getElementById('remoteVideo');
                     if (video.videoWidth && video.videoHeight) {
                         document.getElementById('resolution').textContent = 
                             video.videoWidth + 'x' + video.videoHeight;
+                    } else {
+                        console.warn('⚠️ Video element has no dimensions yet');
                     }
                     
                 } catch (error) {
