@@ -14,7 +14,8 @@ const wss = new WebSocket.Server({ server });
 app.use(express.static(__dirname));
 
 // C++ server configuration
-const CPP_SERVER = 'http://localhost:9090'; // C++ HTTP endpoint
+//const CPP_SERVER = 'http://96.237.100.238:19090'; // C++ HTTP endpoint. use localhost internally
+const CPP_SERVER = 'http://localhost:9090'; // C++ HTTP endpoint. use localhost internally
 
 console.log('\n' + '='.repeat(60));
 console.log('🌉 WebRTC Signaling Relay');
